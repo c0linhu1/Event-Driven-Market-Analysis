@@ -296,7 +296,7 @@ class Portfolio(commands.Cog):
         db_manager.reset_realized_pnl(user.id, guild.id)
 
         await interaction.response.send_message(
-            f"✅ Realized P&L reset complete! Previous realized P&L was ${realized_pnl:,.2f}",
+            f"Realized P&L reset complete! Previous realized P&L was ${realized_pnl:,.2f}",
             ephemeral=True
         )
 
