@@ -54,6 +54,10 @@ async def delete_old_messages():
                 # skip private/hidden channels
                 continue  
 
+            # skipping the commands channel
+            if channel.name == "bot-descriptions-commands":
+                continue
+
             try:
                 deleted = await channel.purge(
                     limit=None,

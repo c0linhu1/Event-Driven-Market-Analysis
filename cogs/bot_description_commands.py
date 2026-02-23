@@ -55,7 +55,7 @@ class BotHelp(commands.Cog):
                     try:
                         msg = await channel.fetch_message(msg_id)
                         await msg.edit(embed=embed)
-                        # print(f"Updated existing help message in {guild.name}")
+                        print(f"Updated existing help message in {guild.name}")
                         return
                     except discord.NotFound:
                         # Message deleted, continue to create new one

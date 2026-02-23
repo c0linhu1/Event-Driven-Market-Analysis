@@ -17,7 +17,8 @@ class BaseChannels(commands.Cog):
             required_channels = [
                 "news", 
                 "earnings-calendar-dashboard", 
-                "bot-descriptions-commands"
+                "bot-descriptions-commands",
+                'IPO-calender-dashboard'
             ]
 
             for channel_name in required_channels:
@@ -85,8 +86,8 @@ class BaseChannels(commands.Cog):
                 await self._trigger_help_post(guild)
                 
         except discord.Forbidden:
-            print(f"❌ No permission to create '{channel_name}' in {guild.name}")
-            print(f"   Bot needs 'Manage Channels' permission")
+            print(f"No permission to create '{channel_name}' in {guild.name}")
+            print(f"Bot needs 'Manage Channels' permission")
         except discord.HTTPException as e:
             if e.status == 403:
                 print(f"Forbidden: Cannot create '{channel_name}' in {guild.name}")
