@@ -114,6 +114,25 @@ class IPOCalendar(commands.Cog):
 
             ipo_list = ipo_data['ipoCalendar']
 
+            if not ipo_list:
+                for guild in self.bot.guilds:
+                    channel = discord.utils.get(guild.text_channels, name="ipo-calendar-dashboard")
+                    if not channel:
+                        continue
+                    try:
+                        await channel.purge(limit=None)
+                        embed = discord.Embed(
+                            title="🆕 Upcoming IPOs (Next 28 Days)",
+                            description="No IPOs scheduled in the next 28 days.",
+                            color=discord.Color.purple(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        embed.set_footer(text="Data from Finnhub")
+                        await channel.send(embed=embed)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+                return
+            
             # Group by date
             by_date = {}
             for ipo in ipo_list:
