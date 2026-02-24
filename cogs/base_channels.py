@@ -19,6 +19,8 @@ class BaseChannels(commands.Cog):
                 "earnings-calendar-dashboard", 
                 "bot-descriptions-commands",
                 "SEC-filings-dashboard",
+                "economic-calendar-dashboard",
+                "vix-dashboard",
                 'IPO-calendar-dashboard'
             ]
 
