@@ -121,9 +121,24 @@ class SECFilings(commands.Cog):
             filings = self.filter_major_filings(filings_data)
 
             if not filings:
-                print("No major SEC filings found in the past month")
+                for guild in self.bot.guilds:
+                    channel = discord.utils.get(guild.text_channels, name="sec-filings-dashboard")
+                    if not channel:
+                        continue
+                    try:
+                        await channel.purge(limit=None)
+                        embed = discord.Embed(
+                            title="📑 SEC Filings (Past 7 Days)",
+                            description="No major SEC filings (10-K, 10-Q, 8-K, S-1) found in the past 7 days.",
+                            color=discord.Color.dark_gold(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        embed.set_footer(text="Data from Finnhub")
+                        await channel.send(embed=embed)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
                 return
-
+            
             # group by filed date
             by_date = {}
             for filing in filings:
