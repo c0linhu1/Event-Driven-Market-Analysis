@@ -18,7 +18,7 @@ class BaseChannels(commands.Cog):
                 "news", 
                 "earnings-calendar-dashboard", 
                 "bot-descriptions-commands",
-                'IPO-calender-dashboard'
+                'IPO-calendar-dashboard'
             ]
 
             for channel_name in required_channels:
