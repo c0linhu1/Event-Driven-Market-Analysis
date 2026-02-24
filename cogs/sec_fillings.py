@@ -23,7 +23,7 @@ class SECFilings(commands.Cog):
     def cog_unload(self):
         self.post_daily_filings.cancel()
 
-    async def fetch_sec_filings(self, days_back=28):
+    async def fetch_sec_filings(self, days_back = 28):
         """Fetching recent SEC filings from Finnhub"""
         from_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
 
@@ -128,8 +128,8 @@ class SECFilings(commands.Cog):
                     try:
                         await channel.purge(limit=None)
                         embed = discord.Embed(
-                            title="📑 SEC Filings (Past 7 Days)",
-                            description="No major SEC filings (10-K, 10-Q, 8-K, S-1) found in the past 7 days.",
+                            title="📑 SEC Filings (Past 28 Days)",
+                            description="No major SEC filings (10-K, 10-Q, 8-K, S-1) found in the past 28 days.",
                             color=discord.Color.dark_gold(),
                             timestamp=datetime.now(timezone.utc)
                         )
