@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import aiohttp
 from datetime import datetime, timedelta, timezone
 import os
@@ -9,7 +8,7 @@ import asyncio
 
 load_dotenv()
 
-FMP_API_KEYS = [os.getenv(f"FMP_API_KEY_{i}") for i in range(1, 9)]
+RAPID_API_KEY = os.getenv("RAPID_API_KEY_1")
 
 
 class EconomicCalendar(commands.Cog):
@@ -20,46 +19,67 @@ class EconomicCalendar(commands.Cog):
     def cog_unload(self):
         self.post_daily_economic.cancel()
 
-    async def fetch_economic_calendar(self, days_ahead = 28):
-        """Fetching economic calendar from FMP"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        future_date = (datetime.now() + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+    async def fetch_economic_calendar(self):
+        """Fetching economic calendar from RapidAPI Trader Calendar"""
+        url = "https://trader-calendar.p.rapidapi.com/api/calendar"
+        headers = {
+            "Content-Type": "application/json",
+            "x-rapidapi-host": "trader-calendar.p.rapidapi.com",
+            "x-rapidapi-key": RAPID_API_KEY
+        }
+        payload = {"country": "USA"}
 
-        for i, api_key in enumerate(FMP_API_KEYS):
-            if not api_key:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        print(f"*** Successfully fetched economic calendar ({len(data)} total events)")
+                        return data
+                    else:
+                        text = await resp.text()
+                        print(f"-- Economic calendar API error {resp.status}: {text}")
+                        return None
+        except Exception as e:
+            print(f"--Error fetching economic calendar: {e}")
+            return None
+
+    def filter_upcoming_events(self, events, days_ahead=28):
+        """Filter events to only include the next 28 days"""
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(days=days_ahead)
+
+        upcoming = []
+        for event in events:
+            start_str = event.get('start', '')
+            if not start_str:
                 continue
-            url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={future_date}&apikey={api_key}"
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            print(f"*** Successfully fetched economic calendar with FMP key {i + 1}")
-                            return data
-                        elif resp.status == 429:
-                            print(f"--FMP economic key {i + 1} rate limited")
-                            continue
-                        else:
-                            text = await resp.text()
-                            print(f"-- {resp.status}: FMP economic key {i + 1}: {text}")
-                            continue
-            except Exception as e:
-                print(f"--Error fetching economic calendar with FMP key {i + 1}: {e}")
+                # parsing ISO format with timezone offset
+                event_time = datetime.fromisoformat(start_str)
+
+                if event_time.tzinfo is None:
+                    event_time = event_time.replace(tzinfo=timezone.utc)
+                # convert to UTC for comparison
+                event_utc = event_time.astimezone(timezone.utc)
+
+                if now <= event_utc <= cutoff:
+                    event['parsed_date'] = event_utc.strftime('%Y-%m-%d')
+                    event['parsed_time'] = event_utc.strftime('%I:%M %p')
+                    upcoming.append(event)
+            except (ValueError, TypeError):
                 continue
 
-        print("---All FMP API keys failed for economic calendar")
-        return None
+        return upcoming
 
-    def get_impact_emoji(self, impact):
-        """Emoji based on event impact level"""
-        impact = (impact or '').lower()
-        if impact == 'high':
+    def get_importance_emoji(self, importance):
+        """Emoji based on importance level"""
+        if importance >= 5:
             return '🔴'
-        elif impact == 'medium':
+        elif importance >= 3:
             return '🟡'
-        elif impact == 'low':
+        else:
             return '🟢'
-        return '⚪'
 
     def build_economic_day_embeds(self, date, events_list):
         """Building Discord embeds for a day's economic events"""
@@ -69,34 +89,26 @@ class EconomicCalendar(commands.Cog):
         except:
             formatted_date = date
 
+        # sort by time
+        events_list.sort(key=lambda e: e.get('start', ''))
+
         entries = []
         for event in events_list:
-            name = event.get('event', 'Unknown Event')
-            country = event.get('country', '')
-            impact = event.get('impact', '')
-            estimate = event.get('estimate')
-            previous = event.get('previous')
-            actual = event.get('actual')
+            title = event.get('title', 'Unknown Event')
+            importance = event.get('importance', 0)
+            time_str = event.get('parsed_time', '')
+            short_desc = event.get('shortDesc', '')
 
-            emoji = self.get_impact_emoji(impact)
-            entry = f"{emoji} **{name}**"
-            if country:
-                entry += f" ({country})"
-
-            details = []
-            if estimate is not None and estimate != '':
-                details.append(f"Est: {estimate}")
-            if previous is not None and previous != '':
-                details.append(f"Prev: {previous}")
-            if actual is not None and actual != '':
-                details.append(f"Act: {actual}")
-            if details:
-                entry += f" • {' | '.join(details)}"
-
+            emoji = self.get_importance_emoji(importance)
+            entry = f"{emoji} **{title}**"
+            if time_str:
+                entry += f" • {time_str} ET"
+            if short_desc:
+                entry += f"\n   _{short_desc}_"
             entries.append(entry)
 
         embeds = []
-        chunk_size = 25
+        chunk_size = 15 
 
         for i in range(0, len(entries), chunk_size):
             chunk = entries[i:i + chunk_size]
@@ -115,7 +127,7 @@ class EconomicCalendar(commands.Cog):
                 timestamp=datetime.now(timezone.utc)
             )
             embed.add_field(name="Events", value="\n".join(chunk) if chunk else "None", inline=False)
-            embed.set_footer(text="🔴 High Impact • 🟡 Medium • 🟢 Low • Data from FMP")
+            embed.set_footer(text="🔴 High Impact • 🟡 Medium • 🟢 Low • Data from Trader Calendar")
             embeds.append(embed)
 
         return embeds
@@ -126,10 +138,9 @@ class EconomicCalendar(commands.Cog):
         await self.bot.wait_until_ready()
 
         try:
-            events = await self.fetch_economic_calendar()
+            all_events = await self.fetch_economic_calendar()
 
-            # handle no data
-            if not events:
+            if not all_events:
                 for guild in self.bot.guilds:
                     channel = discord.utils.get(guild.text_channels, name="economic-calendar-dashboard")
                     if not channel:
@@ -138,20 +149,42 @@ class EconomicCalendar(commands.Cog):
                         await channel.purge(limit=None)
                         embed = discord.Embed(
                             title="📆 Economic Calendar (Next 28 Days)",
-                            description="No economic events found for the next 28 days.",
+                            description="Unable to fetch economic calendar data.",
                             color=discord.Color.orange(),
                             timestamp=datetime.now(timezone.utc)
                         )
-                        embed.set_footer(text="Data from FMP")
+                        embed.set_footer(text="Data from Trader Calendar")
                         await channel.send(embed=embed)
                     except (discord.Forbidden, discord.HTTPException):
                         pass
                 return
 
+            # filter to next 7 days only
+            upcoming = self.filter_upcoming_events(all_events, days_ahead=7)
+
+            if not upcoming:
+                for guild in self.bot.guilds:
+                    channel = discord.utils.get(guild.text_channels, name="economic-calendar-dashboard")
+                    if not channel:
+                        continue
+                    try:
+                        await channel.purge(limit=None)
+                        embed = discord.Embed(
+                            title="📆 Economic Calendar (Next 28 Days)",
+                            description="No economic events scheduled in the next 28 days.",
+                            color=discord.Color.orange(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        embed.set_footer(text="Data from Trader Calendar")
+                        await channel.send(embed=embed)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+                return
+
+            # group by date
             by_date = {}
-            for event in events:
-                raw_date = event.get('date', 'Unknown')
-                d = raw_date.split(' ')[0] if ' ' in raw_date else raw_date
+            for event in upcoming:
+                d = event.get('parsed_date', 'Unknown')
                 if d not in by_date:
                     by_date[d] = []
                 by_date[d].append(event)
@@ -167,13 +200,12 @@ class EconomicCalendar(commands.Cog):
                     # Summary embed
                     summary = discord.Embed(
                         title="📆 Economic Calendar (Next 28 Days)",
-                        description=f"**Total: {len(events)} events** scheduled",
+                        description=f"**Total: {len(upcoming)} events** scheduled",
                         color=discord.Color.orange(),
                         timestamp=datetime.now(timezone.utc)
                     )
 
-                    # count high impact events
-                    high_impact = sum(1 for e in events if (e.get('impact') or '').lower() == 'high')
+                    high_impact = sum(1 for e in upcoming if e.get('importance', 0) >= 5)
                     summary.add_field(
                         name="⚠️ High Impact Events",
                         value=f"**{high_impact}** high-impact events this week",
@@ -186,7 +218,7 @@ class EconomicCalendar(commands.Cog):
                             day_name = datetime.strptime(date, '%Y-%m-%d').strftime('%a %m/%d')
                         except:
                             day_name = date
-                        day_high = sum(1 for e in by_date[date] if (e.get('impact') or '').lower() == 'high')
+                        day_high = sum(1 for e in by_date[date] if e.get('importance', 0) >= 5)
                         high_tag = f" 🔴 {day_high}" if day_high > 0 else ""
                         lines.append(f"• **{day_name}**: {len(by_date[date])} events{high_tag}")
 
