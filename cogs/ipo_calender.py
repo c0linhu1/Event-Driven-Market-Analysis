@@ -6,23 +6,27 @@ from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 import asyncio
+import traceback
 
 load_dotenv()
 
 FINNHUB_API_KEYS = [os.getenv(f"FINNHUB_API_KEY_{i}") for i in range(1, 11)]
 
+
 class IPOCalendar(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.post_daily_ipos.start()
+        print("IPO Calendar cog initialized")
 
     def cog_unload(self):
         self.post_daily_ipos.cancel()
 
-    async def fetch_ipo_calendar(self, days_ahead = 28):
-        """Fetching IPO calender from finnhub api"""
+    async def fetch_ipo_calendar(self, days_ahead=28):
+        """Fetching IPO calendar from Finnhub API"""
         today = datetime.now().strftime('%Y-%m-%d')
-        future_time = (datetime.now() + timedelta(days = days_ahead)).strftime('%Y-%m-%d')
+        future_time = (datetime.now() + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+        print(f"Fetching IPO calendar from {today} to {future_time}")
 
         for i, api_key in enumerate(FINNHUB_API_KEYS):
             url = f"https://finnhub.io/api/v1/calendar/ipo?from={today}&to={future_time}&token={api_key}"
@@ -59,7 +63,7 @@ class IPOCalendar(commands.Cog):
         for ipo in ipo_list:
             symbol = ipo.get('symbol', 'N/A')
             name = ipo.get('name', 'Unknown')
-            price = ipo.get('price', '')         
+            price = ipo.get('price', '')
             exchange = ipo.get('exchange', '')
             shares = ipo.get('numberOfShares')
             status = ipo.get('status', '')
@@ -104,71 +108,88 @@ class IPOCalendar(commands.Cog):
     async def post_daily_ipos(self):
         """Post IPO calendar once daily"""
         await self.bot.wait_until_ready()
+        print("--- IPO CALENDAR TASK STARTING ---")
 
-        ipo_data = await self.fetch_ipo_calendar()
-        if not ipo_data or 'ipoCalendar' not in ipo_data:
-            print("Failed to fetch IPO calendar")
-            return
+        try:
+            ipo_data = await self.fetch_ipo_calendar()
+            print(f"IPO data received: {ipo_data is not None}")
 
-        ipo_list = ipo_data['ipoCalendar']
+            if not ipo_data or 'ipoCalendar' not in ipo_data:
+                print(f"Failed to fetch IPO calendar. Keys in response: {ipo_data.keys() if ipo_data else 'None'}")
+                return
 
-        # Group by date
-        by_date = {}
-        for ipo in ipo_list:
-            d = ipo.get('date', 'Unknown')
-            if d not in by_date:
-                by_date[d] = []
-            by_date[d].append(ipo)
+            ipo_list = ipo_data['ipoCalendar']
+            print(f"Found {len(ipo_list)} IPOs")
 
-        for guild in self.bot.guilds:
-            channel = discord.utils.get(guild.text_channels, name="ipo-calendar-dashboard")
-            if not channel:
-                continue
+            # Group by date
+            by_date = {}
+            for ipo in ipo_list:
+                d = ipo.get('date', 'Unknown')
+                if d not in by_date:
+                    by_date[d] = []
+                by_date[d].append(ipo)
 
-            try:
-                await channel.purge(limit=None)
+            print(f"Grouped into {len(by_date)} days")
 
-                # Summary embed
-                summary = discord.Embed(
-                    title="🆕 Upcoming IPOs (Next 28 Days)",
-                    description=f"**Total: {len(ipo_list)} IPOs** scheduled",
-                    color=discord.Color.purple(),
-                    timestamp=datetime.now(timezone.utc)
-                )
-                lines = []
-                for date in sorted(by_date.keys()):
-                    try:
-                        day_name = datetime.strptime(date, '%Y-%m-%d').strftime('%a %m/%d')
-                    except:
-                        day_name = date
-                    lines.append(f"• **{day_name}**: {len(by_date[date])} IPOs")
+            for guild in self.bot.guilds:
+                channel = discord.utils.get(guild.text_channels, name="ipo-calendar-dashboard")
+                if not channel:
+                    print(f"No ipo-calendar-dashboard channel in {guild.name}")
+                    continue
 
-                summary.add_field(
-                    name="Daily Breakdown",
-                    value="\n".join(lines) if lines else "No IPOs scheduled",
-                    inline=False
-                )
-                await channel.send(embed=summary)
-                await asyncio.sleep(0.5)
+                print(f"Posting IPOs to {guild.name}...")
 
-                # Post each day's IPOs
-                for date in sorted(by_date.keys()):
-                    embeds = self.build_ipo_day_embeds(date, by_date[date])
-                    for embed in embeds:
-                        await channel.send(embed=embed)
-                        await asyncio.sleep(0.5)
+                try:
+                    await channel.purge(limit=None)
 
-                print(f"Posted {len(by_date)} day(s) of IPOs to {guild.name}")
+                    # Summary embed
+                    summary = discord.Embed(
+                        title="🆕 Upcoming IPOs (Next 28 Days)",
+                        description=f"**Total: {len(ipo_list)} IPOs** scheduled",
+                        color=discord.Color.purple(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    lines = []
+                    for date in sorted(by_date.keys()):
+                        try:
+                            day_name = datetime.strptime(date, '%Y-%m-%d').strftime('%a %m/%d')
+                        except:
+                            day_name = date
+                        lines.append(f"• **{day_name}**: {len(by_date[date])} IPOs")
 
-            except discord.Forbidden:
-                print(f"No permission to post in ipo-calendar-dashboard in {guild.name}")
-            except discord.HTTPException as e:
-                print(f"Failed to post IPO calendar in {guild.name}: {e}")
+                    summary.add_field(
+                        name="Daily Breakdown",
+                        value="\n".join(lines) if lines else "No IPOs scheduled",
+                        inline=False
+                    )
+                    await channel.send(embed=summary)
+                    await asyncio.sleep(0.5)
+
+                    # Post each day's IPOs
+                    for date in sorted(by_date.keys()):
+                        embeds = self.build_ipo_day_embeds(date, by_date[date])
+                        for embed in embeds:
+                            await channel.send(embed=embed)
+                            await asyncio.sleep(0.5)
+
+                    print(f"Posted {len(by_date)} day(s) of IPOs to {guild.name}")
+
+                except discord.Forbidden:
+                    print(f"No permission to post in ipo-calendar-dashboard in {guild.name}")
+                except discord.HTTPException as e:
+                    print(f"Failed to post IPO calendar in {guild.name}: {e}")
+
+        except Exception as e:
+            print(f"IPO CALENDAR ERROR: {e}")
+            traceback.print_exc()
+
+        print("--- IPO CALENDAR TASK COMPLETE ---")
 
     @post_daily_ipos.before_loop
     async def before_daily_ipos(self):
         """Wait for bot to be ready before starting loop"""
         await self.bot.wait_until_ready()
+        print("IPO Calendar loop ready to start")
 
 
 async def setup(bot):
