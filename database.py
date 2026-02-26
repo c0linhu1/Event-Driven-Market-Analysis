@@ -1,23 +1,21 @@
-# creates connection to database - making sure we incorporate all datatypes used
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Boolean, Float, Index
-# base class that models inherit from 
-from sqlalchemy.ext.declarative import declarative_base
-# incorporating database sessions 
-from sqlalchemy.orm import sessionmaker
+"""
+Dual-database backend: SQLite (local) + MongoDB Atlas (cloud/GCP)
+"""
+
 from datetime import datetime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Index
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 import os
+from dotenv import load_dotenv
 
-"""
-Using SQLalchemy so we can still use python while designing database with flexibility of SQL
-    - ORM - Object Relational mapper - technique that allows devs to interact with databases
-"""
+load_dotenv()
 
-# base class - acts as registry for all the database models
+
 Base = declarative_base()
 
 class HelpMessage(Base):
     __tablename__ = 'help_messages'
-    
     id = Column(Integer, primary_key=True)
     guild_id = Column(Integer, nullable=False, unique=True)
     message_id = Column(Integer, nullable=False)
@@ -26,14 +24,11 @@ class HelpMessage(Base):
 
 class SeenArticle(Base):
     __tablename__ = 'seen_articles'
-    
     id = Column(Integer, primary_key=True)
     guild_id = Column(Integer, nullable=False)
     article_identifier = Column(String(64), nullable=False)
     source = Column(String(20), nullable=False)
     created_at = Column(DateTime, default=datetime.now)
-    
-    # composite indexes - so article lookups are faster
     __table_args__ = (
         Index('idx_guild_article', 'guild_id', 'article_identifier'),
         Index('idx_guild_created', 'guild_id', 'created_at'),
@@ -41,7 +36,6 @@ class SeenArticle(Base):
 
 class GuildHeartbeat(Base):
     __tablename__ = 'guild_heartbeats'
-    
     id = Column(Integer, primary_key=True)
     guild_id = Column(Integer, nullable=False, unique=True)
     last_heartbeat = Column(DateTime, nullable=False)
@@ -50,16 +44,12 @@ class GuildHeartbeat(Base):
 
 class WatchlistItem(Base):
     __tablename__ = 'watchlist_items'
-    
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=False)
     guild_id = Column(Integer, nullable=False)
     symbol = Column(String(20), nullable=False)
     company_name = Column(String(200))
     created_at = Column(DateTime, default=datetime.now)
-    
-
-    # using index for instant results - speed up database queries - dont need to scan each row
     __table_args__ = (
         Index('idx_user_guild', 'user_id', 'guild_id'),
         Index('idx_user_guild_symbol', 'user_id', 'guild_id', 'symbol', unique=True),
@@ -67,7 +57,6 @@ class WatchlistItem(Base):
 
 class PortfolioPosition(Base):
     __tablename__ = 'portfolio_positions'
-    
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=False)
     guild_id = Column(Integer, nullable=False)
@@ -77,9 +66,6 @@ class PortfolioPosition(Base):
     average_price = Column(Float, nullable=False)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
-    # again creating indexes to make lookups faster 
-    # bot will lookup by user id and guild id rather than scanning entire table
     __table_args__ = (
         Index('idx_portfolio_user_guild', 'user_id', 'guild_id'),
         Index('idx_portfolio_user_guild_symbol', 'user_id', 'guild_id', 'symbol', unique=True),
@@ -87,332 +73,290 @@ class PortfolioPosition(Base):
 
 class UserStats(Base):
     __tablename__ = 'user_stats'
-    
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, nullable=False)
     guild_id = Column(Integer, nullable=False)
     total_realized_pnl = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
     __table_args__ = (
         Index('idx_user_stats', 'user_id', 'guild_id', unique=True),
     )
 
-# this class is where api interacts with database 
-class DatabaseManager:
-    # creating a sqlite database file 
-    def __init__(self, database_url='sqlite:///bot_data.db'):
-        # creating connection to database - basically translates python to SQL
-        self.engine = create_engine(database_url, echo=False)
-        # creating session - connecting to database
-        self.SessionLocal = sessionmaker(bind=self.engine)
-        # creating all tables if havent already - connecting to database
-        Base.metadata.create_all(bind=self.engine) 
+class SQLiteManager:
+    """
+    SQLite backend using SQLAlchemy
+    Methods are async so cogs can use the same await pattern
+    """
 
-        # making sure old articles are cleaned on startup
-        self.cleanup_old_articles()
-        
-    # creating new database session helper method 
+    def __init__(self, database_url='sqlite:///bot_data.db'):
+        self.engine = create_engine(database_url, echo=False)
+        self.SessionLocal = sessionmaker(bind=self.engine)
+        Base.metadata.create_all(bind=self.engine)
+        self._cleanup_old_articles()
+
     def _get_session(self):
         return self.SessionLocal()
-    
+
+    async def initialize(self):
+        print("[SQLite] Backend ready — using bot_data.db")
+
     def _cleanup_old_articles(self):
-        # closes session when done cleaning 
-        with self.get_session() as session:
+        with self._get_session() as session:
             try:
                 guilds = session.query(SeenArticle.guild_id).distinct().all()
                 for (guild_id,) in guilds:
-                    # getting articles through each server - starting from the newest one
                     articles = session.query(SeenArticle)\
                         .filter(SeenArticle.guild_id == guild_id)\
-                        .order_by(SeenArticle.created_at.desc())\
-                        .all()
-                    
-                    # only keep most recent 500 articles
+                        .order_by(SeenArticle.created_at.desc()).all()
                     if len(articles) > 500:
                         for article in articles[500:]:
                             session.delete(article)
-                
-                # saving changes with this session
                 session.commit()
+            except Exception as e:
+                print(f"[SQLite] Cleanup error: {e}")
+                session.rollback()
 
-            except Exception as e:
-                print(f"Error during cleanup: {e}")
-                # if error undo changes made in current session
-                session.rollback()
-    
-    # Help Messages
-    def get_help_message_id(self, guild_id):
-        with self.get_session() as session:
-            help_msg = session.query(HelpMessage).filter(HelpMessage.guild_id == guild_id).first()
-            return help_msg.message_id if help_msg else None
-    
-    def save_help_message_id(self, guild_id, message_id):
-        with self.get_session() as session:
-            try:
-                help_msg = session.query(HelpMessage).filter(HelpMessage.guild_id == guild_id).first()
-                if help_msg:
-                    help_msg.message_id = message_id
-                    help_msg.updated_at = datetime.now()
-                else:
-                    help_msg = HelpMessage(guild_id=guild_id, message_id=message_id)
-                    session.add(help_msg)
-                session.commit()
-            except Exception as e:
-                print(f"Error saving help message: {e}")
-                session.rollback()
-    
-    # Seen Articles
-    def is_article_seen(self, guild_id, article_identifier):
-        with self.get_session() as session:
-            return session.query(SeenArticle)\
-                .filter_by(guild_id=guild_id, article_identifier=article_identifier)\
-                .first() is not None
-    
-    def mark_article_seen(self, guild_id, article_identifier, source):
-        with self.get_session() as session:
-            try:
-                if not self.is_article_seen(guild_id, article_identifier):
-                    article = SeenArticle(guild_id=guild_id, article_identifier=article_identifier, source=source)
-                    session.add(article)
-                    session.commit()
-                    self.cleanup_guild_articles(session, guild_id)
-            except Exception as e:
-                print(f"Error marking article: {e}")
-                session.rollback()
-    
-    def cleanup_guild_articles(self, session, guild_id):
+    def _cleanup_guild_articles(self, session, guild_id):
         try:
             articles = session.query(SeenArticle)\
                 .filter(SeenArticle.guild_id == guild_id)\
-                .order_by(SeenArticle.created_at.desc())\
-                .all()
-            
+                .order_by(SeenArticle.created_at.desc()).all()
             if len(articles) > 500:
                 for article in articles[500:]:
                     session.delete(article)
                 session.commit()
         except Exception as e:
-            print(f"Error cleaning articles: {e}")
+            print(f"[SQLite] Guild cleanup error: {e}")
             session.rollback()
-    
-    # Heartbeat
-    def get_last_heartbeat(self, guild_id):
-        with self.get_session() as session:
-            heartbeat = session.query(GuildHeartbeat).filter_by(guild_id=guild_id).first()
-            return heartbeat.last_heartbeat if heartbeat else None
-    
-    def update_heartbeat(self, guild_id, timestamp):
-        with self.get_session() as session:
+
+    async def get_help_message_id(self, guild_id):
+        with self._get_session() as session:
+            msg = session.query(HelpMessage).filter(HelpMessage.guild_id == guild_id).first()
+            return msg.message_id if msg else None
+
+    async def save_help_message_id(self, guild_id, message_id):
+        with self._get_session() as session:
             try:
-                heartbeat = session.query(GuildHeartbeat).filter_by(guild_id=guild_id).first()
-                if heartbeat:
-                    heartbeat.last_heartbeat = timestamp
-                    heartbeat.updated_at = datetime.now()
+                msg = session.query(HelpMessage).filter(HelpMessage.guild_id == guild_id).first()
+                if msg:
+                    msg.message_id = message_id
+                    msg.updated_at = datetime.now()
                 else:
-                    heartbeat = GuildHeartbeat(guild_id=guild_id, last_heartbeat=timestamp)
-                    session.add(heartbeat)
+                    msg = HelpMessage(guild_id=guild_id, message_id=message_id)
+                    session.add(msg)
                 session.commit()
             except Exception as e:
-                print(f"Error updating heartbeat: {e}")
+                print(f"[SQLite] Error saving help message: {e}")
                 session.rollback()
 
-    # Watchlist
-    def add_to_watchlist(self, user_id, guild_id, symbol, company_name=None):
-        with self.get_session() as session:
+    async def is_article_seen(self, guild_id, article_identifier):
+        with self._get_session() as session:
+            return session.query(SeenArticle)\
+                .filter_by(guild_id=guild_id, article_identifier=article_identifier)\
+                .first() is not None
+
+    async def mark_article_seen(self, guild_id, article_identifier, source):
+        with self._get_session() as session:
+            try:
+                exists = session.query(SeenArticle)\
+                    .filter_by(guild_id=guild_id, article_identifier=article_identifier)\
+                    .first() is not None
+                if not exists:
+                    article = SeenArticle(guild_id=guild_id, article_identifier=article_identifier, source=source)
+                    session.add(article)
+                    session.commit()
+                    self._cleanup_guild_articles(session, guild_id)
+            except Exception as e:
+                print(f"[SQLite] Error marking article: {e}")
+                session.rollback()
+
+    async def get_last_heartbeat(self, guild_id):
+        with self._get_session() as session:
+            hb = session.query(GuildHeartbeat).filter_by(guild_id=guild_id).first()
+            return hb.last_heartbeat if hb else None
+
+    async def update_heartbeat(self, guild_id, timestamp):
+        with self._get_session() as session:
+            try:
+                hb = session.query(GuildHeartbeat).filter_by(guild_id=guild_id).first()
+                if hb:
+                    hb.last_heartbeat = timestamp
+                    hb.updated_at = datetime.now()
+                else:
+                    hb = GuildHeartbeat(guild_id=guild_id, last_heartbeat=timestamp)
+                    session.add(hb)
+                session.commit()
+            except Exception as e:
+                print(f"[SQLite] Error updating heartbeat: {e}")
+                session.rollback()
+
+    async def add_to_watchlist(self, user_id, guild_id, symbol, company_name=None):
+        with self._get_session() as session:
             try:
                 existing = session.query(WatchlistItem)\
-                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper())\
-                    .first()
-                
+                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper()).first()
                 if existing:
                     return False
-                
                 item = WatchlistItem(user_id=user_id, guild_id=guild_id, symbol=symbol.upper(), company_name=company_name)
                 session.add(item)
                 session.commit()
                 return True
             except Exception as e:
-                print(f"Error adding to watchlist: {e}")
+                print(f"[SQLite] Error adding to watchlist: {e}")
                 session.rollback()
                 return False
-    
-    def remove_from_watchlist(self, user_id, guild_id, symbol):
-        with self.get_session() as session:
+
+    async def remove_from_watchlist(self, user_id, guild_id, symbol):
+        with self._get_session() as session:
             try:
                 item = session.query(WatchlistItem)\
-                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper())\
-                    .first()
-                
+                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper()).first()
                 if item:
                     session.delete(item)
                     session.commit()
                     return True
                 return False
             except Exception as e:
-                print(f"Error removing from watchlist: {e}")
+                print(f"[SQLite] Error removing from watchlist: {e}")
                 session.rollback()
                 return False
-    
-    def get_user_watchlist(self, user_id, guild_id):
-        with self.get_session() as session:
+
+    async def get_user_watchlist(self, user_id, guild_id):
+        with self._get_session() as session:
             try:
-                # getting watchlist based on user id and guild id 
                 items = session.query(WatchlistItem)\
                     .filter_by(user_id=user_id, guild_id=guild_id)\
-                    .order_by(WatchlistItem.symbol)\
-                    .all()
-                
+                    .order_by(WatchlistItem.symbol).all()
                 return [{'symbol': i.symbol, 'company_name': i.company_name, 'created_at': i.created_at} for i in items]
             except Exception as e:
-                print(f"Error getting watchlist: {e}")
+                print(f"[SQLite] Error getting watchlist: {e}")
                 return []
-    
-    def get_watchlist_count(self, user_id, guild_id):
-        with self.get_session() as session:
+
+    async def get_watchlist_count(self, user_id, guild_id):
+        with self._get_session() as session:
             return session.query(WatchlistItem).filter_by(user_id=user_id, guild_id=guild_id).count()
 
-    # Portfolio
-    def add_portfolio_position(self, user_id, guild_id, symbol, quantity, price):
-        with self.get_session() as session:
+    async def add_portfolio_position(self, user_id, guild_id, symbol, quantity, price):
+        with self._get_session() as session:
             try:
-                position = session.query(PortfolioPosition)\
-                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper())\
-                    .first()
-                
-                if position:
-                    # Update existing
-                    new_shares = position.shares + quantity
-                    new_total = position.total_cost + (quantity * price)
-                    position.shares = new_shares
-                    position.total_cost = new_total
-                    position.average_price = new_total / new_shares
-                    position.updated_at = datetime.now()
+                pos = session.query(PortfolioPosition)\
+                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper()).first()
+                if pos:
+                    new_shares = pos.shares + quantity
+                    new_total = pos.total_cost + (quantity * price)
+                    pos.shares = new_shares
+                    pos.total_cost = new_total
+                    pos.average_price = new_total / new_shares
+                    pos.updated_at = datetime.now()
                 else:
-                    # Create new
-                    position = PortfolioPosition(
+                    pos = PortfolioPosition(
                         user_id=user_id, guild_id=guild_id, symbol=symbol.upper(),
                         shares=quantity, total_cost=quantity * price, average_price=price
                     )
-                    session.add(position)
-                
+                    session.add(pos)
                 session.commit()
                 return True
             except Exception as e:
-                print(f"Error adding position: {e}")
+                print(f"[SQLite] Error adding position: {e}")
                 session.rollback()
                 return False
-    
-    def sell_portfolio_position(self, user_id, guild_id, symbol, quantity, price):
-        with self.get_session() as session:
+
+    async def sell_portfolio_position(self, user_id, guild_id, symbol, quantity, price):
+        with self._get_session() as session:
             try:
-                position = session.query(PortfolioPosition)\
-                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper())\
-                    .first()
-                
-                if not position:
+                pos = session.query(PortfolioPosition)\
+                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper()).first()
+
+                if not pos:
                     return (False, f"❌ You don't own any **{symbol.upper()}** shares.")
-                
-                if position.shares < quantity:
-                    return (False, f"❌ You only have **{position.shares}** shares.")
-                
-                # Calculate P&L
-                profit_per_share = price - position.average_price
+                if pos.shares < quantity:
+                    return (False, f"❌ You only have **{pos.shares}** shares.")
+
+                profit_per_share = price - pos.average_price
                 total_profit = profit_per_share * quantity
                 sale_value = quantity * price
-                
-                # Track realized P&L
-                self.add_realized_pnl(user_id, guild_id, total_profit)
-                
-                # Update position
-                new_shares = position.shares - quantity
-                
+
+                await self.add_realized_pnl(user_id, guild_id, total_profit)
+
+                new_shares = pos.shares - quantity
                 if new_shares == 0:
-                    session.delete(position)
-                    msg = f"✅ Sold all **{quantity} shares** of **{symbol.upper()}** at **${price:.2f}**\n" \
-                          f"Sale: ${sale_value:.2f} | P&L: ${total_profit:,.2f} ({profit_per_share/position.average_price*100:+.2f}%)"
+                    session.delete(pos)
+                    msg = (f"✅ Sold all **{quantity} shares** of **{symbol.upper()}** at **${price:.2f}**\n"
+                           f"Sale: ${sale_value:.2f} | P&L: ${total_profit:,.2f} ({profit_per_share/pos.average_price*100:+.2f}%)")
                 else:
-                    position.shares = new_shares
-                    position.total_cost -= quantity * position.average_price
-                    position.updated_at = datetime.now()
-                    msg = f"✅ Sold **{quantity} shares** of **{symbol.upper()}** at **${price:.2f}**\n" \
-                          f"Sale: ${sale_value:.2f} | P&L: ${total_profit:,.2f} ({profit_per_share/position.average_price*100:+.2f}%)\n" \
-                          f"Remaining: **{new_shares} shares**"
-                
+                    pos.shares = new_shares
+                    pos.total_cost -= quantity * pos.average_price
+                    pos.updated_at = datetime.now()
+                    msg = (f"✅ Sold **{quantity} shares** of **{symbol.upper()}** at **${price:.2f}**\n"
+                           f"Sale: ${sale_value:.2f} | P&L: ${total_profit:,.2f} ({profit_per_share/pos.average_price*100:+.2f}%)\n"
+                           f"Remaining: **{new_shares} shares**")
+
                 session.commit()
                 return (True, msg)
-                
             except Exception as e:
-                print(f"Error selling position: {e}")
+                print(f"[SQLite] Error selling position: {e}")
                 session.rollback()
                 return (False, f"❌ Error: {str(e)}")
-    
-    def get_user_portfolio(self, user_id, guild_id):
-        with self.get_session() as session:
+
+    async def get_user_portfolio(self, user_id, guild_id):
+        with self._get_session() as session:
             try:
                 positions = session.query(PortfolioPosition)\
                     .filter_by(user_id=user_id, guild_id=guild_id)\
-                    .order_by(PortfolioPosition.symbol)\
-                    .all()
-                
-                return [{'symbol': p.symbol, 'shares': p.shares, 'average_price': p.average_price, 
-                        'total_cost': p.total_cost, 'created_at': p.created_at, 'updated_at': p.updated_at} 
+                    .order_by(PortfolioPosition.symbol).all()
+                return [{'symbol': p.symbol, 'shares': p.shares, 'average_price': p.average_price,
+                         'total_cost': p.total_cost, 'created_at': p.created_at, 'updated_at': p.updated_at}
                         for p in positions]
             except Exception as e:
-                print(f"Error getting portfolio: {e}")
+                print(f"[SQLite] Error getting portfolio: {e}")
                 return []
-    
-    def get_portfolio_count(self, user_id, guild_id):
-        with self.get_session() as session:
+
+    async def get_portfolio_count(self, user_id, guild_id):
+        with self._get_session() as session:
             return session.query(PortfolioPosition).filter_by(user_id=user_id, guild_id=guild_id).count()
 
-    def remove_portfolio_position(self, user_id, guild_id, symbol):
-        with self.get_session() as session:
+    async def remove_portfolio_position(self, user_id, guild_id, symbol):
+        with self._get_session() as session:
             try:
-                position = session.query(PortfolioPosition)\
-                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper())\
-                    .first()
-                
-                if position:
-                    session.delete(position)
+                pos = session.query(PortfolioPosition)\
+                    .filter_by(user_id=user_id, guild_id=guild_id, symbol=symbol.upper()).first()
+                if pos:
+                    session.delete(pos)
                     session.commit()
                     return True
                 return False
             except Exception as e:
-                print(f"Error removing position: {e}")
+                print(f"[SQLite] Error removing position: {e}")
                 session.rollback()
                 return False
 
-    # User Stats (Realized P&L)
-    def add_realized_pnl(self, user_id, guild_id, amount):
-        with self.get_session() as session:
+    async def add_realized_pnl(self, user_id, guild_id, amount):
+        with self._get_session() as session:
             try:
                 stats = session.query(UserStats).filter_by(user_id=user_id, guild_id=guild_id).first()
-                
                 if stats:
                     stats.total_realized_pnl += amount
                     stats.updated_at = datetime.now()
                 else:
                     stats = UserStats(user_id=user_id, guild_id=guild_id, total_realized_pnl=amount)
                     session.add(stats)
-                
                 session.commit()
             except Exception as e:
-                print(f"Error adding P&L: {e}")
+                print(f"[SQLite] Error adding P&L: {e}")
                 session.rollback()
 
-    def get_realized_pnl(self, user_id, guild_id):
-        with self.get_session() as session:
+    async def get_realized_pnl(self, user_id, guild_id):
+        with self._get_session() as session:
             try:
                 stats = session.query(UserStats).filter_by(user_id=user_id, guild_id=guild_id).first()
                 return stats.total_realized_pnl if stats else 0.0
             except Exception as e:
-                print(f"Error getting P&L: {e}")
+                print(f"[SQLite] Error getting P&L: {e}")
                 return 0.0
 
-    def reset_realized_pnl(self, user_id, guild_id):
-        with self.get_session() as session:
+    async def reset_realized_pnl(self, user_id, guild_id):
+        with self._get_session() as session:
             try:
                 stats = session.query(UserStats).filter_by(user_id=user_id, guild_id=guild_id).first()
                 if stats:
@@ -420,8 +364,308 @@ class DatabaseManager:
                     stats.updated_at = datetime.now()
                     session.commit()
             except Exception as e:
-                print(f"Error resetting P&L: {e}")
+                print(f"[SQLite] Error resetting P&L: {e}")
                 session.rollback()
-        
-# creating global instance of the database manager so i can import into other files
-db_manager = DatabaseManager()
+
+
+class MongoManager:
+    """
+    MongoDB Atlas backend using motor (async driver).
+    Collections mirror SQLite tables. 
+    """
+
+    def __init__(self, mongo_uri):
+        from motor.motor_asyncio import AsyncIOMotorClient
+        self.client = AsyncIOMotorClient(mongo_uri)
+        self.db = self.client['stockbot']
+
+        # collection references
+        self.help_messages = self.db['help_messages']
+        self.seen_articles = self.db['seen_articles']
+        self.guild_heartbeats = self.db['guild_heartbeats']
+        self.watchlist_items = self.db['watchlist_items']
+        self.portfolio_positions = self.db['portfolio_positions']
+        self.user_stats = self.db['user_stats']
+
+    async def initialize(self):
+        """Verifying connection and create indexes."""
+        try:
+            await self.client.admin.command('ping')
+            print("[MongoDB] Connected to Atlas cluster on GCP")
+
+            # TTL index — auto-delete seen articles after 7 days
+            await self.seen_articles.create_index("created_at", expireAfterSeconds=604800)
+            await self.seen_articles.create_index([("guild_id", 1), ("article_identifier", 1)], unique=True)
+
+            await self.help_messages.create_index("guild_id", unique=True)
+            await self.guild_heartbeats.create_index("guild_id", unique=True)
+
+            await self.watchlist_items.create_index([("user_id", 1), ("guild_id", 1)])
+            await self.watchlist_items.create_index([("user_id", 1), ("guild_id", 1), ("symbol", 1)], unique=True)
+
+            await self.portfolio_positions.create_index([("user_id", 1), ("guild_id", 1)])
+            await self.portfolio_positions.create_index([("user_id", 1), ("guild_id", 1), ("symbol", 1)], unique=True)
+
+            await self.user_stats.create_index([("user_id", 1), ("guild_id", 1)], unique=True)
+
+            print("[MongoDB] All indexes created")
+
+        except Exception as e:
+            print(f"[MongoDB] Connection failed: {e}")
+            raise
+
+
+    async def get_help_message_id(self, guild_id):
+        doc = await self.help_messages.find_one({"guild_id": guild_id})
+        return doc["message_id"] if doc else None
+
+    async def save_help_message_id(self, guild_id, message_id):
+        try:
+            await self.help_messages.update_one(
+                {"guild_id": guild_id},
+                {
+                    "$set": {"message_id": message_id, "updated_at": datetime.now()},
+                    "$setOnInsert": {"created_at": datetime.now()}
+                },
+                upsert=True
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error saving help message: {e}")
+
+    async def is_article_seen(self, guild_id, article_identifier):
+        doc = await self.seen_articles.find_one(
+            {"guild_id": guild_id, "article_identifier": article_identifier}
+        )
+        return doc is not None
+
+    async def mark_article_seen(self, guild_id, article_identifier, source):
+        try:
+            await self.seen_articles.update_one(
+                {"guild_id": guild_id, "article_identifier": article_identifier},
+                {"$setOnInsert": {
+                    "guild_id": guild_id,
+                    "article_identifier": article_identifier,
+                    "source": source,
+                    "created_at": datetime.now()
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error marking article: {e}")
+
+    async def get_last_heartbeat(self, guild_id):
+        doc = await self.guild_heartbeats.find_one({"guild_id": guild_id})
+        return doc["last_heartbeat"] if doc else None
+
+    async def update_heartbeat(self, guild_id, timestamp):
+        try:
+            await self.guild_heartbeats.update_one(
+                {"guild_id": guild_id},
+                {
+                    "$set": {"last_heartbeat": timestamp, "updated_at": datetime.now()},
+                    "$setOnInsert": {"created_at": datetime.now()}
+                },
+                upsert=True
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error updating heartbeat: {e}")
+
+
+    async def add_to_watchlist(self, user_id, guild_id, symbol, company_name=None):
+        try:
+            result = await self.watchlist_items.update_one(
+                {"user_id": user_id, "guild_id": guild_id, "symbol": symbol.upper()},
+                {"$setOnInsert": {
+                    "user_id": user_id, "guild_id": guild_id,
+                    "symbol": symbol.upper(), "company_name": company_name,
+                    "created_at": datetime.now()
+                }},
+                upsert=True
+            )
+            return result.upserted_id is not None
+        except Exception as e:
+            print(f"[MongoDB] Error adding to watchlist: {e}")
+            return False
+
+    async def remove_from_watchlist(self, user_id, guild_id, symbol):
+        try:
+            result = await self.watchlist_items.delete_one(
+                {"user_id": user_id, "guild_id": guild_id, "symbol": symbol.upper()}
+            )
+            return result.deleted_count > 0
+        except Exception as e:
+            print(f"[MongoDB] Error removing from watchlist: {e}")
+            return False
+
+    async def get_user_watchlist(self, user_id, guild_id):
+        try:
+            cursor = self.watchlist_items.find(
+                {"user_id": user_id, "guild_id": guild_id}
+            ).sort("symbol", 1)
+            items = await cursor.to_list(length=100)
+            return [{'symbol': i['symbol'], 'company_name': i.get('company_name'),
+                     'created_at': i['created_at']} for i in items]
+        except Exception as e:
+            print(f"[MongoDB] Error getting watchlist: {e}")
+            return []
+
+    async def get_watchlist_count(self, user_id, guild_id):
+        try:
+            return await self.watchlist_items.count_documents(
+                {"user_id": user_id, "guild_id": guild_id}
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error counting watchlist: {e}")
+            return 0
+
+
+    async def add_portfolio_position(self, user_id, guild_id, symbol, quantity, price):
+        try:
+            existing = await self.portfolio_positions.find_one(
+                {"user_id": user_id, "guild_id": guild_id, "symbol": symbol.upper()}
+            )
+
+            if existing:
+                new_shares = existing['shares'] + quantity
+                new_total = existing['total_cost'] + (quantity * price)
+                await self.portfolio_positions.update_one(
+                    {"_id": existing['_id']},
+                    {"$set": {
+                        "shares": new_shares,
+                        "total_cost": new_total,
+                        "average_price": new_total / new_shares,
+                        "updated_at": datetime.now()
+                    }}
+                )
+            else:
+                await self.portfolio_positions.insert_one({
+                    "user_id": user_id, "guild_id": guild_id, "symbol": symbol.upper(),
+                    "shares": quantity, "total_cost": quantity * price,
+                    "average_price": price, "created_at": datetime.now(), "updated_at": datetime.now()
+                })
+            return True
+        except Exception as e:
+            print(f"[MongoDB] Error adding position: {e}")
+            return False
+
+    async def sell_portfolio_position(self, user_id, guild_id, symbol, quantity, price):
+        try:
+            pos = await self.portfolio_positions.find_one(
+                {"user_id": user_id, "guild_id": guild_id, "symbol": symbol.upper()}
+            )
+
+            if not pos:
+                return (False, f"❌ You don't own any **{symbol.upper()}** shares.")
+            if pos['shares'] < quantity:
+                return (False, f"❌ You only have **{pos['shares']}** shares.")
+
+            profit_per_share = price - pos['average_price']
+            total_profit = profit_per_share * quantity
+            sale_value = quantity * price
+
+            await self.add_realized_pnl(user_id, guild_id, total_profit)
+
+            new_shares = pos['shares'] - quantity
+            if new_shares == 0:
+                await self.portfolio_positions.delete_one({"_id": pos['_id']})
+                msg = (f"✅ Sold all **{quantity} shares** of **{symbol.upper()}** at **${price:.2f}**\n"
+                       f"Sale: ${sale_value:.2f} | P&L: ${total_profit:,.2f} ({profit_per_share/pos['average_price']*100:+.2f}%)")
+            else:
+                await self.portfolio_positions.update_one(
+                    {"_id": pos['_id']},
+                    {"$set": {
+                        "shares": new_shares,
+                        "total_cost": pos['total_cost'] - (quantity * pos['average_price']),
+                        "updated_at": datetime.now()
+                    }}
+                )
+                msg = (f"✅ Sold **{quantity} shares** of **{symbol.upper()}** at **${price:.2f}**\n"
+                       f"Sale: ${sale_value:.2f} | P&L: ${total_profit:,.2f} ({profit_per_share/pos['average_price']*100:+.2f}%)\n"
+                       f"Remaining: **{new_shares} shares**")
+
+            return (True, msg)
+        except Exception as e:
+            print(f"[MongoDB] Error selling position: {e}")
+            return (False, f"❌ Error: {str(e)}")
+
+    async def get_user_portfolio(self, user_id, guild_id):
+        try:
+            cursor = self.portfolio_positions.find(
+                {"user_id": user_id, "guild_id": guild_id}
+            ).sort("symbol", 1)
+            positions = await cursor.to_list(length=100)
+            return [{'symbol': p['symbol'], 'shares': p['shares'], 'average_price': p['average_price'],
+                     'total_cost': p['total_cost'], 'created_at': p['created_at'],
+                     'updated_at': p.get('updated_at')} for p in positions]
+        except Exception as e:
+            print(f"[MongoDB] Error getting portfolio: {e}")
+            return []
+
+    async def get_portfolio_count(self, user_id, guild_id):
+        try:
+            return await self.portfolio_positions.count_documents(
+                {"user_id": user_id, "guild_id": guild_id}
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error counting portfolio: {e}")
+            return 0
+
+    async def remove_portfolio_position(self, user_id, guild_id, symbol):
+        try:
+            result = await self.portfolio_positions.delete_one(
+                {"user_id": user_id, "guild_id": guild_id, "symbol": symbol.upper()}
+            )
+            return result.deleted_count > 0
+        except Exception as e:
+            print(f"[MongoDB] Error removing position: {e}")
+            return False
+
+    async def add_realized_pnl(self, user_id, guild_id, amount):
+        try:
+            await self.user_stats.update_one(
+                {"user_id": user_id, "guild_id": guild_id},
+                {
+                    "$inc": {"total_realized_pnl": amount},
+                    "$set": {"updated_at": datetime.now()},
+                    "$setOnInsert": {"created_at": datetime.now()}
+                },
+                upsert=True
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error adding P&L: {e}")
+
+    async def get_realized_pnl(self, user_id, guild_id):
+        try:
+            doc = await self.user_stats.find_one({"user_id": user_id, "guild_id": guild_id})
+            return doc['total_realized_pnl'] if doc else 0.0
+        except Exception as e:
+            print(f"[MongoDB] Error getting P&L: {e}")
+            return 0.0
+
+    async def reset_realized_pnl(self, user_id, guild_id):
+        try:
+            await self.user_stats.update_one(
+                {"user_id": user_id, "guild_id": guild_id},
+                {"$set": {"total_realized_pnl": 0.0, "updated_at": datetime.now()}}
+            )
+        except Exception as e:
+            print(f"[MongoDB] Error resetting P&L: {e}")
+
+
+def create_db_manager():
+    backend = os.getenv('DB_BACKEND', 'sqlite').lower()
+
+    if backend == 'mongodb':
+        mongo_uri = os.getenv('MONGO_DB_URI')
+        if not mongo_uri:
+            print("[DB] MONGO_URI not set — falling back to SQLite")
+            return SQLiteManager()
+        print(f"[DB] Using MongoDB backend")
+        return MongoManager(mongo_uri)
+    else:
+        print(f"[DB] Using SQLite backend")
+        return SQLiteManager()
+
+
+# global instance 
+db_manager = create_db_manager()

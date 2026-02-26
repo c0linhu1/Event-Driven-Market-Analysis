@@ -90,7 +90,7 @@ class Portfolio(commands.Cog):
             await interaction.response.send_message("❌ Invalid price/lot_size", ephemeral=True)
             return
         
-        db_manager.add_portfolio_position(user.id, guild.id, ticker, lot_size, price)
+        await db_manager.add_portfolio_position(user.id, guild.id, ticker, lot_size, price)
         total_cost = price * lot_size
 
         await interaction.response.send_message(
@@ -120,7 +120,7 @@ class Portfolio(commands.Cog):
             return
         
         # selljing from database - expecting a tuple from function in database
-        success, message = db_manager.sell_portfolio_position(user.id, guild.id, ticker, lot_size, price)
+        success, message = await db_manager.sell_portfolio_position(user.id, guild.id, ticker, lot_size, price)
         await interaction.response.send_message(message, ephemeral=True)
 
     @app_commands.command(name = "show_portfolio", description = "View all your stock positions in discord portfolio")
@@ -132,7 +132,7 @@ class Portfolio(commands.Cog):
         guild = interaction.guild
 
         # access user specific portfolio in database
-        portfolio = db_manager.get_user_portfolio(user.id, guild.id)
+        portfolio = await db_manager.get_user_portfolio(user.id, guild.id)
 
         if not portfolio:
             await interaction.followup.send("Your portfolio is empty. Use `/add_position` to add stocks!", ephemeral=True)
@@ -206,9 +206,9 @@ class Portfolio(commands.Cog):
         user = interaction.user
         guild = interaction.guild
 
-        portfolio = db_manager.get_user_portfolio(user.id, guild.id)
+        portfolio = await db_manager.get_user_portfolio(user.id, guild.id)
         
-        realized_pnl = db_manager.get_realized_pnl(user.id, guild.id)
+        realized_pnl = await db_manager.get_realized_pnl(user.id, guild.id)
 
         # Calculate unrealized P&L from current holdings
         unrealized_invested = 0
@@ -257,7 +257,7 @@ class Portfolio(commands.Cog):
         user = interaction.user
         guild = interaction.guild
 
-        portfolio = db_manager.get_user_portfolio(user.id, guild.id)
+        portfolio = await db_manager.get_user_portfolio(user.id, guild.id)
 
         if not portfolio:
             await interaction.response.send_message(
@@ -268,7 +268,7 @@ class Portfolio(commands.Cog):
 
         deleted_count = 0
         for position in portfolio:
-            success = db_manager.remove_portfolio_position(user.id, guild.id, position['symbol'])
+            success = await db_manager.remove_portfolio_position(user.id, guild.id, position['symbol'])
             if success:
                 deleted_count += 1
 
@@ -284,7 +284,7 @@ class Portfolio(commands.Cog):
         guild = interaction.guild
 
         # Get current realized P&L
-        realized_pnl = db_manager.get_realized_pnl(user.id, guild.id)
+        realized_pnl = await db_manager.get_realized_pnl(user.id, guild.id)
 
         if realized_pnl == 0:
             await interaction.response.send_message(
@@ -293,7 +293,7 @@ class Portfolio(commands.Cog):
             )
             return
 
-        db_manager.reset_realized_pnl(user.id, guild.id)
+        await db_manager.reset_realized_pnl(user.id, guild.id)
 
         await interaction.response.send_message(
             f"Realized P&L reset complete! Previous realized P&L was ${realized_pnl:,.2f}",

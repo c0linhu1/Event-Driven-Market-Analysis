@@ -49,7 +49,7 @@ class BotHelp(commands.Cog):
                 embed = self._build_help_embed()
                 
                 # ATOMIC OPERATION: Try to update existing message first
-                msg_id = db_manager.get_help_message_id(guild.id)
+                msg_id = await db_manager.get_help_message_id(guild.id)
                 
                 if msg_id:
                     try:
@@ -73,7 +73,7 @@ class BotHelp(commands.Cog):
                 # Create new message
                 try:
                     msg = await channel.send(embed=embed)
-                    db_manager.save_help_message_id(guild.id, msg.id)
+                    await db_manager.save_help_message_id(guild.id, msg.id)
                 except discord.Forbidden:
                     print(f"No permission to send help message in {guild.name}")
                 except discord.HTTPException as e:

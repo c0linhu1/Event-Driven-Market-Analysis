@@ -130,14 +130,14 @@ class Watchlist(commands.Cog):
             return
 
         # Make a watchlist limit
-        watchlist_count = db_manager.get_watchlist_count(user.id, guild.id)
+        watchlist_count = await db_manager.get_watchlist_count(user.id, guild.id)
         if watchlist_count > 25:
             message = "You watchlist is full. Maximum 25 companies allowed. " \
             "Please use the '/remove_company' command to make space"
             await response_handler.send_response(interaction, message)
             
         # Add to database
-        success = db_manager.add_to_watchlist(user.id, guild.id, symbol, company_name)
+        success = await db_manager.add_to_watchlist(user.id, guild.id, symbol, company_name)
         
         if success:
             if company_name:
@@ -169,7 +169,7 @@ class Watchlist(commands.Cog):
             return
 
         # Remove from database
-        success = db_manager.remove_from_watchlist(user.id, guild.id, symbol)
+        success = await db_manager.remove_from_watchlist(user.id, guild.id, symbol)
         
         if success:
             message = f"📉 Removed **{symbol}** from your watchlist."
@@ -190,7 +190,7 @@ class Watchlist(commands.Cog):
             return
 
         # Get watchlist from database
-        watchlist_items = db_manager.get_user_watchlist(user.id, guild.id)
+        watchlist_items = await db_manager.get_user_watchlist(user.id, guild.id)
 
         if not watchlist_items:
             message = "📭 Your watchlist is empty. Use `/add_company` to add companies!"

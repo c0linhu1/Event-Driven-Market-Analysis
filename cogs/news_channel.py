@@ -69,18 +69,18 @@ class NewsCog(commands.Cog):
             identifier = make_identifier(article, prefix=f"{source}-")
             
             # using database to see if article has been posted already
-            if not db_manager.is_article_seen(guild.id, identifier):
+            if not await db_manager.is_article_seen(guild.id, identifier):
                 embed = self.build_embed(article, source)
                 await channel.send(embed=embed)
                 
                 # Mark article as seen in database
-                db_manager.mark_article_seen(guild.id, identifier, source)
+                await db_manager.mark_article_seen(guild.id, identifier, source)
                 sent_any = True
 
         # create heartbeat if no new news
         if not sent_any:
             now = datetime.now()
-            last_sent = db_manager.get_last_heartbeat(guild.id)
+            last_sent = await db_manager.get_last_heartbeat(guild.id)
 
             if not last_sent or now - last_sent >= HEARTBEAT_COOLDOWN:
                 await channel.send(
@@ -89,7 +89,7 @@ class NewsCog(commands.Cog):
                     "Do your own research for faster or equity-specific news.\n"
                 )
                 # updating heatbeat in db
-                db_manager.update_heartbeat(guild.id, now)
+                await db_manager.update_heartbeat(guild.id, now)
 
 
     @tasks.loop(minutes=TWITTER_FETCH_INTERVAL)
@@ -292,7 +292,7 @@ class NewsCog(commands.Cog):
     def build_embed(self, article, source):
         """Build a Discord embed for an article."""
         if source == "finnhub":
-            headline = article.get("headline", "No title")
+            headline = article.get("headline", "No title")[:256]
             summary = article.get("summary", "")
             timestamp = article.get("datetime")
             color = discord.Color.yellow()
@@ -315,7 +315,7 @@ class NewsCog(commands.Cog):
 
 
         else:
-            headline = article.get("title", "No title")
+            headline = article.get("title", "No title")[:256]
             summary = article.get("description", "")
             timestamp = article.get("published_at")
             color = discord.Color.green()

@@ -81,6 +81,7 @@ async def main():
         # initialize database before loading cogs
         print("Initializing database...")
         await load()
+        await db_manager.initialize()
 
         token = os.getenv("DISCORD_TOKEN")
         if not token:
