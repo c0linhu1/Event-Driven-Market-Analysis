@@ -114,10 +114,10 @@ class DatabaseManager:
         self.cleanup_old_articles()
         
     # creating new database session helper method 
-    def get_session(self):
+    def _get_session(self):
         return self.SessionLocal()
     
-    def cleanup_old_articles(self):
+    def _cleanup_old_articles(self):
         # closes session when done cleaning 
         with self.get_session() as session:
             try:
