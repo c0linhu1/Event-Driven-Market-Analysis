@@ -523,8 +523,8 @@ class MongoManager:
             await self.client.admin.command('ping')
             print("[MongoDB] Connected to Atlas cluster on GCP")
 
-            # TTL index — auto-delete seen articles after 7 days
-            await self.seen_articles.create_index("created_at", expireAfterSeconds=604800)
+            # TTL index — auto-delete seen articles after 2 days
+            await self.seen_articles.create_index("created_at", expireAfterSeconds=172800)
             await self.seen_articles.create_index([("guild_id", 1), ("article_identifier", 1)], unique=True)
 
             await self.help_messages.create_index("guild_id", unique=True)
