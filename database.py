@@ -2,7 +2,7 @@
 Dual-database backend: SQLite (local) + MongoDB Atlas (cloud/GCP)
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -81,6 +81,28 @@ class UserStats(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     __table_args__ = (
         Index('idx_user_stats', 'user_id', 'guild_id', unique=True),
+    )
+
+class Event(Base):
+    __tablename__ = 'events'
+    id = Column(Integer, primary_key=True)
+    identifier = Column(String(64), nullable=False, unique=True)
+    symbol = Column(String(5), nullable=False)
+    headline = Column(String(500), nullable=False)
+    summary = Column(String(2000))
+    source = Column(String(50))
+    url = Column(String(500))
+    event_timestamp = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    embedding_model = Column(String(100))
+    novelty_score = Column(Float)
+    novelty_percentile = Column(Float)
+    embedding_json = Column(String)
+    __table_args__ = (
+        Index('idx_event_identifier', 'identifier', unique=True),
+        Index('idx_event_symbol', 'symbol'),
+        Index('idx_event_symbol_timestamp', 'symbol', 'event_timestamp'),
+        Index('idx_event_novelty_score', 'novelty_score'),
     )
 
 class SQLiteManager:
@@ -367,6 +389,113 @@ class SQLiteManager:
                 print(f"[SQLite] Error resetting P&L: {e}")
                 session.rollback()
 
+    async def is_event_seen(self, identifier):
+        with self._get_session() as session:
+            return session.query(Event)\
+                .filter_by(identifier=identifier)\
+                .first() is not None
+
+    async def store_event(self, event_data):
+        with self._get_session() as session:
+            try:
+                import json
+                exists = session.query(Event)\
+                    .filter_by(identifier=event_data['identifier'])\
+                    .first() is not None
+                if exists:
+                    return False
+
+                embedding_json = None
+                if event_data.get('embedding') is not None:
+                    embedding_json = json.dumps(event_data['embedding'])
+
+                event = Event(
+                    identifier=event_data['identifier'],
+                    symbol=event_data['symbol'],
+                    headline=event_data['headline'],
+                    summary=event_data.get('summary', ''),
+                    source=event_data.get('source', ''),
+                    url=event_data.get('url', ''),
+                    event_timestamp=event_data['event_timestamp'],
+                    created_at=event_data.get('created_at', datetime.now()),
+                    embedding_json=embedding_json,
+                    embedding_model=event_data.get('embedding_model'),
+                    novelty_score=event_data.get('novelty_score'),
+                    novelty_percentile=event_data.get('novelty_percentile'),
+                )
+                session.add(event)
+                session.commit()
+                return True
+            except Exception as e:
+                print(f"[SQLite] Error storing event: {e}")
+                session.rollback()
+                return False
+
+    async def get_events_by_symbol(self, symbol, days_back=30):
+        with self._get_session() as session:
+            try:
+                import json
+                cutoff = datetime.now() - timedelta(days=days_back)
+                events = session.query(Event)\
+                    .filter(Event.symbol == symbol.upper(),
+                            Event.event_timestamp >= cutoff)\
+                    .order_by(Event.event_timestamp.desc())\
+                    .all()
+                results = []
+                for e in events:
+                    embedding = None
+                    if e.embedding_json:
+                        embedding = json.loads(e.embedding_json)
+                    results.append({
+                        'identifier': e.identifier,
+                        'symbol': e.symbol,
+                        'headline': e.headline,
+                        'event_timestamp': e.event_timestamp,
+                        'embedding': embedding,
+                        'novelty_score': e.novelty_score,
+                        'novelty_percentile': e.novelty_percentile,
+                    })
+                return results
+            except Exception as e:
+                print(f"[SQLite] Error getting events: {e}")
+                return []
+
+    async def get_unprocessed_events(self, limit=100):
+        with self._get_session() as session:
+            try:
+                events = session.query(Event)\
+                    .filter(Event.embedding_json == None)\
+                    .order_by(Event.created_at.asc())\
+                    .limit(limit)\
+                    .all()
+                return [{
+                    'identifier': e.identifier,
+                    'symbol': e.symbol,
+                    'headline': e.headline,
+                    'event_timestamp': e.event_timestamp,
+                } for e in events]
+            except Exception as e:
+                print(f"[SQLite] Error getting unprocessed events: {e}")
+                return []
+
+    async def update_event_novelty(self, identifier, embedding, model_name, score, percentile):
+        with self._get_session() as session:
+            try:
+                import json
+                event = session.query(Event).filter_by(identifier=identifier).first()
+                if event:
+                    event.embedding_json = json.dumps(embedding)
+                    event.embedding_model = model_name
+                    event.novelty_score = score
+                    event.novelty_percentile = percentile
+                    session.commit()
+                    return True
+                return False
+            except Exception as e:
+                print(f"[SQLite] Error updating event novelty: {e}")
+                session.rollback()
+                return False
+
 
 class MongoManager:
     """
@@ -386,6 +515,7 @@ class MongoManager:
         self.watchlist_items = self.db['watchlist_items']
         self.portfolio_positions = self.db['portfolio_positions']
         self.user_stats = self.db['user_stats']
+        self.events = self.db['events']
 
     async def initialize(self):
         """Verifying connection and create indexes."""
@@ -407,6 +537,11 @@ class MongoManager:
             await self.portfolio_positions.create_index([("user_id", 1), ("guild_id", 1), ("symbol", 1)], unique=True)
 
             await self.user_stats.create_index([("user_id", 1), ("guild_id", 1)], unique=True)
+
+            await self.events.create_index("identifier", unique=True)
+            await self.events.create_index("symbol")
+            await self.events.create_index([("symbol", 1), ("event_timestamp", -1)])
+            await self.events.create_index("novelty_score")
 
             print("[MongoDB] All indexes created")
 
@@ -651,6 +786,75 @@ class MongoManager:
         except Exception as e:
             print(f"[MongoDB] Error resetting P&L: {e}")
 
+    async def is_event_seen(self, identifier):
+        doc = await self.events.find_one({"identifier": identifier})
+        return doc is not None
+
+    async def store_event(self, event_data):
+        try:
+            result = await self.events.update_one(
+                {"identifier": event_data['identifier']},
+                {"$setOnInsert": event_data},
+                upsert=True
+            )
+            return result.upserted_id is not None
+        except Exception as e:
+            print(f"[MongoDB] Error storing event: {e}")
+            return False
+
+    async def get_events_by_symbol(self, symbol, days_back=30):
+        try:
+            from datetime import timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+            cursor = self.events.find({
+                "symbol": symbol.upper(),
+                "event_timestamp": {"$gte": cutoff}
+            }).sort("event_timestamp", -1)
+            events = await cursor.to_list(length=5000)
+            return [{
+                'identifier': e['identifier'],
+                'symbol': e['symbol'],
+                'headline': e['headline'],
+                'event_timestamp': e['event_timestamp'],
+                'embedding': e.get('embedding'),
+                'novelty_score': e.get('novelty_score'),
+                'novelty_percentile': e.get('novelty_percentile'),
+            } for e in events]
+        except Exception as e:
+            print(f"[MongoDB] Error getting events: {e}")
+            return []
+
+    async def get_unprocessed_events(self, limit=100):
+        try:
+            cursor = self.events.find(
+                {"embedding": None}
+            ).sort("created_at", 1).limit(limit)
+            events = await cursor.to_list(length=limit)
+            return [{
+                'identifier': e['identifier'],
+                'symbol': e['symbol'],
+                'headline': e['headline'],
+                'event_timestamp': e['event_timestamp'],
+            } for e in events]
+        except Exception as e:
+            print(f"[MongoDB] Error getting unprocessed events: {e}")
+            return []
+
+    async def update_event_novelty(self, identifier, embedding, model_name, score, percentile):
+        try:
+            await self.events.update_one(
+                {"identifier": identifier},
+                {"$set": {
+                    "embedding": embedding,
+                    "embedding_model": model_name,
+                    "novelty_score": score,
+                    "novelty_percentile": percentile,
+                }}
+            )
+            return True
+        except Exception as e:
+            print(f"[MongoDB] Error updating event novelty: {e}")
+            return False
 
 def create_db_manager():
     backend = os.getenv('DB_BACKEND', 'sqlite').lower()
