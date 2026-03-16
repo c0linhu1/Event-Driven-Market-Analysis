@@ -1,3 +1,4 @@
+# NOT UPDATED 
 # Discord Stock Bot
 
 A Discord bot that provides financial news and stock market information. Implements multiple user commands and features to help beginner traders.
