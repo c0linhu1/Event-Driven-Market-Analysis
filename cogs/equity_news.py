@@ -23,7 +23,7 @@ TRACKED_SYMBOLS = [
 # should be 5 
 FETCH_INTERVAL = 15
 # should be 2 depends on when last ran
-LOOKBACK_DAYS = 60
+LOOKBACK_DAYS = 30
 
 def make_event_identifier(symbol, headline, timestamp):
     """Generate unique identifier for deduplication."""
