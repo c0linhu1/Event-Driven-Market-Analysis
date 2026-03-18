@@ -32,11 +32,12 @@ A Discord bot that provides financial news and stock market information. Impleme
 - Use Slash Commands
 
 ## Commands
-- `/watchlist` - Create a private watchlist channel
-- `/add_company` - Add a stock to your watchlist
-- `/remove_company` - Remove a stock from your watchlist
-- `/show_watchlist` - Display your watchlist with interactive buttons
-- `/delete_watchlist` - Delete your private watchlist channel
+- /watchlist - Creates a private watchlist channel for you
+- /delete_watchlist - Deletes your private watchlist channel
+- /add_company - Add a company to your watchlist
+- /remove_company - Remove a company from your watchlist
+- /show_watchlist - Show all companies in your watchlist
+
 
 ## Twitter API
 - The api keys for twitter are the BEARER TOKENS
