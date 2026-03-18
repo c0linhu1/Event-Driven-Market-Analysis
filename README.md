@@ -37,7 +37,13 @@ A Discord bot that provides financial news and stock market information. Impleme
 - /add_company - Add a company to your watchlist
 - /remove_company - Remove a company from your watchlist
 - /show_watchlist - Show all companies in your watchlist
-
+- /portfolio - Creates a private portfolio for the user
+- /add_position - Buy stocks and add to your discord portfolio
+- /sell_position - Sell stocks from your discord portfolio
+- /show_portfolio - View all your stock positions in discord portfolio
+- /pnl - Quick view of profit and loss
+- /reset_portfolio - Delete all positions and reset your portfolio
+- /reset_pnl - Reset your realized P&L from past sales
 
 ## Twitter API
 - The api keys for twitter are the BEARER TOKENS
